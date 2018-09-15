@@ -1,0 +1,119 @@
+"""This module let you estimate parameters for ARIMA model:
+
+- Conditional least-squares estimates (cond_ls)
+
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+
+sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/data_simulation')
+
+from time_series_simulation import *
+
+def cond_ls(x, p = 0, q = 0, d = 0, precision = 500, narrow = 0.2, sd = 1, decay_rate = 0.96, decay_steps = 1):
+    """ Find conditional least squares estimates for ARMA model:
+
+    a_t = w_t - phi_1*w_{t-1] - ... - phi_p*w_{t-p] - theta_1*a_{t-1} - ... - theta_q*a_{t-q},
+
+    where w_t = delta^dz_t, z_t = x_t.
+
+    Arguments:
+    x -- array of shape (n,) or (n, 1) containing time series data from ARIMA model
+    p -- AR terms
+    q -- MA terms
+    d -- unit roots
+    precision -- number of random parameter to try
+    narrow -- share of random parameters in narrow interval (normal distribution)
+    sd -- standard deviation for narrow interval
+    decay_rate -- how much standard deviation decay per step
+    decay_steps -- how often standard deviation decay by decay rate, an integer
+
+    Returns:
+    phi_est -- estimated p number of phi coefficients (phi_1, phi_2, ...)
+    theta_est -- estimated q number of theta coefficients (theta_1, theta_2, ...)
+    SS -- conditional sums of squares for estimates
+
+    Note:
+    Uses diff_ARIMA and check_roots functions
+    """
+
+    # calculate differences to adjust for unit roots
+    x = diff_ARIMA(ARIMA = x, d = d)
+
+    # length time series after takning differences
+    n = x.shape[0]
+    x = x.reshape((n, 1))
+
+    if p == 0 and q == 0: # no paramters to estimate
+        return [], [], []
+    else:
+
+        # add inital values to observed data because lags aren't zero
+        w = np.zeros((max(p, q) + n, 1))
+        w[max(p, q):,] = x
+
+        # random terms including inital values
+        a = np.zeros((max(p, q) + n, 1))
+
+        # inital values parameter est, sum of squares, global step (for decay function)
+        phi_est = 0
+        theta_est = 0
+        SS = 0
+        global_step = 0
+        
+        # sum of squares are calculated recursively
+        for j in range(precision):
+
+            # sample AR random parameters values
+            if p > 0:
+                stationary = False
+                while stationary == False:
+                    if j < precision * (1-narrow):
+                        phi = np.random.uniform(-1, 1, (1, p))
+                        stationary = check_roots(phi[0]) # only stationary AR models allowed
+                    else:
+                        phi = np.random.normal(phi_est[0], sd*decay_rate**(global_step / decay_steps), (1, p))
+                        stationary = check_roots(phi[0])
+
+                        global_step = global_step + 1 # update step for decaying sd
+            else:
+                phi = []
+
+            # sample MA random parameters values
+            if q > 0:
+                stationary = False
+                while stationary == False:
+                    if j < precision * (1 - narrow):
+                        theta = np.random.uniform(-1, 1, (1, q))
+                        stationary = check_roots(theta[0]) # only stationary MA models allowed
+                    else:
+                        theta = np.random.normal(theta_est[0], sd*decay_rate**(global_step / decay_steps), (1, q))
+                        stationary = check_roots(theta[0])
+            else:
+                theta = []
+
+            # calculate SS for random values
+            for i in range (n):
+                AR = w[max(p, q) + i] - np.dot(phi, w[max(p, q) + i - p:max(p, q) + i])
+                MA = - np.dot(theta, a[max(p, q) + i - q:max(p, q) + i])
+                a[max(p, q) + i] = AR + MA  
+            SS_new = np.dot(np.transpose(a[max(p, q):]), a[max(p, q):])
+
+            # save random values if lowest SS
+            if SS == 0:
+                 SS = SS_new[0][0]
+            elif SS_new[0][0] < SS:
+                SS = SS_new[0][0]
+                phi_est = phi
+                theta_est = theta
+
+        # flip parameters in natural order
+        if phi_est != []:
+            phi_est = np.flip(phi_est, 1)
+        if theta_est != []:
+            theta_est = np.flip(theta_est, 1)
+            
+
+        return phi_est, theta_est, SS
