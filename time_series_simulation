@@ -1,0 +1,228 @@
+"""This module let you simulate data from time series models:
+
+- Autoregressive integrated moving average (ARIMA)
+- Integrate ARMA time series (integrate_ARMA)
+- Take difference ARIMA time series (diff_ARIMA)
+- Random mix ARIMA (r_ARIMA)
+
+"""
+
+import numpy as np
+import sympy
+from sympy import Poly
+from mpmath import *
+
+def ARIMA(phi = np.array([0]), theta = np.array([0]), d = 0, mu = 0, sigma = 1, n = 20, burn = 10):
+    """ Simulate data from ARMA model (eq. 1.2.4):
+
+    z_t = phi_1*z_{t-1} + ... + phi_p*z_{t-p} + a_t + theta_1*a_{t-1} + ... + theta_q*a_{t-q} + t
+
+    with d unit roots for ARIMA model.
+
+    Arguments:
+    phi -- array of shape (p,) or (p, 1) containing phi_1, phi2, ... for AR model
+    theta -- array of shape (q) or (q, 1) containing theta_1, theta_2, ... for MA model
+    d -- number of unit roots for non-stationary time series
+    mu -- level of the process
+    sigma -- standard deviation for normal distribution error term (mean assumed zero i.e. white noise)
+    n -- length time series
+    burn -- number of discarded values because series beginns without lagged terms
+
+    Return:
+    x -- simulated ARMA process of shape (n, 1)
+
+    Reference:
+    Time Series Analysis by Box et al.
+    """
+
+    # add "theta_0" = 1 to theta
+    theta = np.append(1, theta)
+    
+    # set max lag length AR model
+    p = phi.shape[0]
+
+    # set max lag length MA model
+    q = theta.shape[0]
+
+    # simulate n + q error terms
+    a = np.random.normal(0, sigma, (n + max(p, q) + burn, 1))
+    
+    # create array for returned values
+    x = np.zeros((n + max(p, q) + burn, 1))
+
+    # initialize first time series value
+    x[0] = a[0]
+
+    # add AR and MA components
+    for i in range(1, x.shape[0]):
+        AR = np.dot(phi[0 : min(i, p)], np.flip(x[i - min(i, p) : i], 0))
+        MA = np.dot(theta[0 : min(i + 1, q)], np.flip(a[i - min(i, q - 1) : i + 1], 0))
+        x[i] = AR + MA + mu
+
+    # add unit roots
+    if d != 0:
+        ARMA = x[-n: ]
+        m = ARMA.shape[0]
+        z = np.zeros((m + 1, 1)) # create temp array
+
+        for i in range(d):
+            for j in range(m):
+                z[j + 1] = ARMA[j] + z[j] 
+            ARMA = z[1: ]
+        x[-n: ] = z[1: ]
+        
+    return x[-n: ]
+
+def integrate_ARMA(ARMA, d = 1):
+    """ Simulate data from ARIMA model by adding first difference to ARMA model
+
+    Arguments:
+    ARMA -- array of shape (n,) or (n, 1) containing  times series from ARMA model
+    d -- number of unit roots to add for non-stationary time series
+
+    Return:
+    x -- simulated ARIMA process of shape (n, 1)
+    """
+
+    n = ARMA.shape[0]
+
+    # create array for returned values
+    x = np.zeros((n + 1, 1))
+
+    for i in range(d):
+        for j in range(n):
+            x[j + 1] = ARMA[j] + x[j] 
+        ARMA = x[1: ]
+
+    return x[1: ]
+
+def diff_ARIMA(ARIMA, d = 1):
+    """Simulate data from ARMA model by taking first difference of ARIMA model
+    for m different time series of length n
+
+    Arguments:
+    ARIMA -- array of shape (n, m) or (n, m) containing  times series from ARIMA model
+    d -- number of unit roots to remove for stationary time series
+
+    Return:
+    x -- simulated ARMA process of shape (n - d, m)
+    """
+
+    n = ARIMA.shape[0]
+
+    for i in range(d):
+        ARIMA = ARIMA[1:] - ARIMA[:-1]
+
+    x = ARIMA
+
+    return x
+
+def check_roots(coeff):
+    """ Check if roots for characteristic equation are outside of unit cycle for
+    AR (max lag 2) and MA (max lag 2)
+
+    Argument:
+    coeff -- coeffcients for time series model to be checked, an array
+    Returns:
+    stationary -- varible which indices if time series i stationary, a boolean variable
+    """
+
+    coeff_1 = coeff[0]
+    try:
+        coeff_2 = coeff[1]
+    except IndexError:
+        coeff_2 = 0
+
+
+    # check if roots are outside unit cycle
+    if (coeff_2 + coeff_1) < 1 and (coeff_2 - coeff_1) < 1 and abs(coeff_2) < 1:
+        stationary = True
+    else:
+        stationary = False
+
+    return stationary
+
+def r_ARIMA(p = 0, q = 0, d = 0, mu = 0, sigma = 1, n = 20, m = 5, burn = 5):
+    """Simulate data from random mix of ARIMA models
+
+    Arguments:
+    p -- highest allowed lag AR (max 2)
+    q -- highest allowed lag MA (max 2)
+    d -- maxium number of unit roots
+    mu -- -- level of the process
+    sigma -- standard deviation for error term
+    n -- length time series
+    m -- number of times series
+    burn -- number of discarded values because series beginns without lagged terms
+
+    Return:
+    X -- array containing random mix of ARIMA time series of shape (n, m)
+    Y -- array containing binary numbers to indicate ARIMA class (classes, m)
+    PHI -- array containing PHI coefficients for ARIMA times series of shape (p, m)
+    THETA -- array containing THETA coefficients for ARIMA times series of shape (q, m)
+    D -- array contain number of unit roots D for ARIMA times series of shape (d, m)
+    M -- dictionary which assigns a unique class number to each type of ARIMA model of shape (classes, 1)
+
+    Note:
+    Uses ARIMA and check_roots functions
+    """
+
+    # create array that will contain X
+    X = np.zeros((n, m))
+
+    # create array that will contain Y
+    c = (p + 1) * (q + 1) * (d + 1) # number of possible models/classes
+    Y = np.zeros((c, m))
+
+    # create arrayes that will contain PHI, THETA, D
+    PHI = np.zeros((p, m))
+    THETA = np.zeros((q, m))
+    D = np.zeros((1, m))
+
+    # create dictionary for matching class and model
+    M = {}
+    ct = 0 # counter for assigning unique class
+    for i in range(p + 1):
+        for j in range(q + 1):
+            for k in range(d + 1):
+                    M[str(i) + str(j) + str(k)] = ct
+                    ct += 1
+
+    # simulate from random ARIMA model
+    for i in range(m):
+        # choose random model
+        r_p = np.random.randint(0, p + 1)               # random lags AR
+        r_q = np.random.randint(0, q + 1)               # random lags MA
+        r_d = np.random.randint(0, d + 1)               # random unit roots
+
+        # assign AR coefficients
+        if r_p > 0:
+            stationary = False
+            while stationary == False:
+                phi = np.array(np.random.uniform(-1, 1, r_p))
+                stationary = check_roots(phi) # only stationary AR models allowed
+        else:
+            phi = np.array([0])
+
+        # assign MA coefficients
+        if r_q > 0:
+            stationary = False
+            while stationary == False:
+                theta = np.array(np.random.uniform(-1, 1, r_q))
+                stationary = check_roots(theta) # only invertible stationary MA models allowed
+        else:
+            theta = np.array([0])
+
+        # simulate from ARIMA model
+        X[:, i] = ARIMA(phi = phi, theta = theta, d = r_d, mu = mu, sigma = sigma,
+                        n = n, burn = burn).reshape((n,))
+
+        # store class
+        Y[M[str(r_p) + str(r_q) + str(r_d)], i] = 1
+
+        # store coefficients and unit roots
+        PHI[:phi.shape[0], i] = phi
+        THETA[:theta.shape[0], i] = theta
+        D[0, i] = r_d
+        
+    return X, Y, PHI, THETA, D, M
