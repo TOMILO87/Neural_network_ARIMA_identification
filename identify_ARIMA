@@ -1,0 +1,142 @@
+"""This module uses neural neural networks to identify ARIMA models
+based on descriptive statistics
+
+A tutorial is found on my blog:
+https://lofgrenfinance.wordpress.com/2018/09/15/we-use-a-neural-network-to-identify-unknown-time-series/
+"""
+
+import numpy as np
+import sys
+import os
+
+### Location of modules ###
+sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/data_simulation')
+sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/descriptive_statistics')
+sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/data_models')
+sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/parameter_estimation')
+
+from time_series_simulation import *
+from time_series_statistics import *
+from nn import *
+from ARIMA_model_est import *
+
+base_dir = os.path.abspath(os.path.dirname(__file__))
+np.set_printoptions(precision = 3, suppress = True)
+np.random.seed(1)
+tf.set_random_seed(1)
+
+### Parameters ###
+
+# ARIMA parameters
+p = 2 # max AR lags
+q = 2 # max MA lags
+d = 1 # max unit roots
+n = 2000 # length time series
+m = 2500 # number of time seris
+k = 5 # lags sacf
+
+# neural network parameters
+train_share = 0.90 # share of time series used for training
+test_share = 1 - train_share # share of time series used for test
+model = "plain" # neural network to use
+plain_layers = [256, 128, 64] # size of each hidden layer for plain model
+beta = 0 # regularization parameter
+learning_rate = 0.01
+exponential_decay = True
+decay_steps = 100
+decay_rate = 0.96
+staircase = False # type of exponential decay
+num_epochs = 2000
+print_cost = True
+print_cost_freq = 300
+plot_cost = True
+
+# query neural network parameters
+print_prob = False
+print_pred = True
+print_class = True
+
+# estimation parameters
+estimate_test = 2 # number of values in test set to show estimations for
+precision = 500
+
+### Simulation ###
+
+# simulate time series
+X, Y, PHI, THETA, D, M = r_ARIMA(p = p, q = q, d = d, n = n, m = m)
+
+# calculate sample autocorrelation (sacf) function original series which is input neural network
+X_sacf = sacf(X, k = k, print_sacf = False)
+
+# calculate sample partial autocorrelation (spacf) original series which is input neural network
+X_spacf = spacf(X_sacf, print_spacf = False)
+
+# calculate sacf and spacf differentiated series which is input neural network
+X_diff = diff_ARIMA(X, d = 1)
+X_diff_sacf = sacf(X_diff, k = k, print_sacf = False)
+X_diff_spacf = spacf(X_diff_sacf, print_spacf = False)
+
+# combine sacf and spacf for both series
+X_input = np.concatenate((X_sacf, X_spacf,X_diff_sacf, X_diff_spacf))
+
+# output neural network
+Y_output = Y
+
+# make data fit for neural network
+X_input = np.swapaxes(X_input, 0, 1)
+Y_output = np.swapaxes(Y_output, 0, 1)
+temp = np.zeros((m, 4*k, 1, 1)) # because nn only accepts input of shape (m, n_H, n_W, n_C)
+temp[:,:,0,0] = X_input
+X_input = temp
+
+# split train data into train and test sets
+X_train = X_input[:int(X_input.shape[0]*train_share), :, :, :]
+Y_train = Y_output[:int(X_input.shape[0]*train_share), :]
+X_test = X_input[-int(X_input.shape[0]*test_share):, :, :, :]
+Y_test = Y_output[-int(X_input.shape[0]*test_share):, :]
+
+### Training and prediction ###
+
+# initialize neural network
+nn = Neural_network(input_shape = X_train.shape,
+                    output_shape = Y_train.shape,
+                    model = model, plain_layers = plain_layers,
+                    beta = beta)
+
+# train neural network
+_ = nn.train(X_train = X_train, Y_train = Y_train,
+             learning_rate = learning_rate, exponential_decay = exponential_decay,
+             decay_steps = decay_steps, decay_rate = decay_rate, staircase = staircase,
+             print_cost = print_cost, print_cost_freq = print_cost_freq,
+             plot_cost = plot_cost, num_epochs = num_epochs, base_dir = base_dir)
+
+# query neural network
+Y_pred = nn.query(X_test = X_test, Y_test = Y_test,
+             print_prob = print_prob, print_pred = print_pred, print_class = print_class)
+
+# get original time series for test set
+X_orgig_test = X[:, -int(X_input.shape[0]*test_share):]
+
+# get true hyper parameters values for test data to compare with estimate results
+PHI_test = PHI[:, -int(X_input.shape[0]*test_share):]
+THETA_test = THETA[:, -int(X_input.shape[0]*test_share):]
+D_test = D[:, -int(X_input.shape[0]*test_share):]
+
+# estimate parameters for predicted models
+for i in range(estimate_test):
+    # look up predicted model in dictionary
+    model = list(M.keys())[list(M.values()).index(Y_pred[i])]
+
+    # AR, MA lags and unit roots for model
+    p = int(model[0])
+    q = int(model[1])
+    d = int(model[2])
+    
+    # estimate parameters
+    phi_est, theta_est, SS = cond_ls(x = X_orgig_test[:, i], p = p, q = q, d = d)
+
+    #print results
+    print("\nTime series", i)
+    print("phi_est", phi_est, "phi_true", PHI_test[:, i])
+    print("theta_est", theta_est, "theta_true", THETA_test[:, i])
+    print("unit_roots_est", [d], "unit_roots_true", D_test[:, i])
