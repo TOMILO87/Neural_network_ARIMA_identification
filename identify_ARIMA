@@ -10,10 +10,7 @@ import sys
 import os
 
 ### Location of modules ###
-sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/data_simulation')
-sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/descriptive_statistics')
-sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/data_models')
-sys.path.insert(0, r'C:\Users\Tommy\Desktop\2018\lofgren_finance/parameter_estimation')
+sys.path.insert(0, r'C:\Users\...')
 
 from time_series_simulation import *
 from time_series_statistics import *
